@@ -11,16 +11,17 @@ import { FinanceAgent } from './agent';
 import { PolicyEngine } from './policy';
 import { Executor } from './executor';
 import { AuditLogger } from './logger';
+import { getOllamaModel } from './config';
 
-dotenv.config();
+const PROJECT_ROOT = path.resolve(__dirname, '..');
+dotenv.config({ path: path.resolve(PROJECT_ROOT, '.env') });
 
-const POLICY_FILE = path.resolve(process.cwd(), 'policy.yaml');
+const POLICY_FILE = path.resolve(PROJECT_ROOT, 'policy.yaml');
 
-// Initialize OpenClaw components
 const agent = new FinanceAgent();
 const policyEngine = new PolicyEngine(POLICY_FILE);
 const executor = new Executor();
-const logger = new AuditLogger();
+const logger = new AuditLogger(PROJECT_ROOT);
 
 const server = new Server(
   {
@@ -40,7 +41,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       {
         name: "execute_trading_scenario",
         description:
-          "Executes a natural language trading scenario through the OpenClaw Finance Agent. It will parse the intent, evaluate it against strict local YAML policies, and execute on Alpaca paper trading if allowed.",
+          "Executes a natural language trading scenario through the OpenClaw Finance Agent. It parses intent, evaluates strict local YAML policies, and executes on Alpaca paper trading if allowed.",
         inputSchema: {
           type: "object",
           properties: {
@@ -54,7 +55,15 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: "get_audit_logs",
-        description: "Retrieves the recent audit logs of the OpenClaw Finance Agent to review executed, blocked, or skipped trades.",
+        description: "Retrieves recent audit logs to review executed, blocked, or skipped trades.",
+        inputSchema: {
+          type: "object",
+          properties: {},
+        },
+      },
+      {
+        name: "get_agent_status",
+        description: "Returns local runtime status including configured model, policy path, and whether Alpaca execution is enabled.",
         inputSchema: {
           type: "object",
           properties: {},
@@ -72,61 +81,58 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     try {
-      // 1. Agent Reasoning -> Generates Intent Object
       const intent = await agent.generateIntent(scenario);
       logger.logIntent({ scenario, intent });
 
-      // 2. Policy Engine Evaluation (Deterministic Enforcement)
       const evaluation = policyEngine.evaluateIntent(intent);
       logger.logPolicyDecision(intent, evaluation);
       
-      // 3. Conditional Execution Based on Policy Engine Result
       if (evaluation.allowed) {
-        if (!process.env.APCA_API_KEY_ID || process.env.APCA_API_KEY_ID === 'YOUR_PAPER_KEY') {
-          logger.logExecution(intent, 'SKIPPED', 'No Alpaca API Key set in .env');
+        if (!executor.isConfigured()) {
+          logger.logExecution(intent, 'SKIPPED', 'No Alpaca API credentials set in .env');
           return {
             content: [
               {
                 type: "text",
-                text: `✅ Intent ALLOWED by policies: ${JSON.stringify(intent)}\n⚠️ SKIPPED execution because no real Alpaca API key is set in .env.`,
+                text: `Intent ALLOWED by policies: ${JSON.stringify(intent)}\nSKIPPED execution because Alpaca paper trading credentials are not configured.`,
               },
             ],
           };
-        } else {
-          try {
-             const receipt = await executor.executeTrade(intent);
-             logger.logExecution(intent, 'SUCCESS', { id: receipt.id });
-             return {
-              content: [
-                {
-                  type: "text",
-                  text: `✅ Intent ALLOWED by policies: ${JSON.stringify(intent)}\n✅ Trade executed successfully on Alpaca! Order ID: ${receipt.id}`,
-                },
-              ],
-            };
-          } catch (err: any) {
-             logger.logExecution(intent, 'FAILED', err.message);
-             return {
-              content: [
-                {
-                  type: "text",
-                  text: `✅ Intent ALLOWED by policies: ${JSON.stringify(intent)}\n❌ Trade execution on Alpaca failed: ${err.message}`,
-                },
-              ],
-             };
-          }
         }
-      } else {
-        logger.logExecution(intent, 'BLOCKED_BY_POLICY', evaluation);
-        return {
-          content: [
-            {
-              type: "text",
-              text: `❌ Intent DENIED by policies: ${JSON.stringify(intent)}\nReason: ${evaluation.reason} (Policy ID: ${evaluation.failedPolicyId})`,
-            },
-          ],
-        };
+
+        try {
+          const receipt = await executor.executeTrade(intent);
+          logger.logExecution(intent, 'SUCCESS', { id: receipt.id });
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Intent ALLOWED by policies: ${JSON.stringify(intent)}\nTrade executed successfully on Alpaca. Order ID: ${receipt.id}`,
+              },
+            ],
+          };
+        } catch (err: any) {
+          logger.logExecution(intent, 'FAILED', err.message);
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Intent ALLOWED by policies: ${JSON.stringify(intent)}\nTrade execution on Alpaca failed: ${err.message}`,
+              },
+            ],
+          };
+        }
       }
+
+      logger.logExecution(intent, 'BLOCKED_BY_POLICY', evaluation);
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Intent DENIED by policies: ${JSON.stringify(intent)}\nReason: ${evaluation.reason} (Policy ID: ${evaluation.failedPolicyId})`,
+          },
+        ],
+      };
     } catch (error: any) {
       return {
         content: [
@@ -143,12 +149,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   if (request.params.name === "get_audit_logs") {
     try {
       const fs = require('fs');
-      const logs = fs.readFileSync(path.resolve(process.cwd(), 'audit.log'), 'utf8');
+      const logs = fs.readFileSync(path.resolve(PROJECT_ROOT, 'audit.log'), 'utf8');
       return {
         content: [
           {
             type: "text",
-            text: logs.length > 5000 ? logs.substring(logs.length - 5000) : logs, // Return tail log
+            text: logs.length > 5000 ? logs.substring(logs.length - 5000) : logs,
           },
         ],
       };
@@ -157,6 +163,26 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
          content: [{ type: "text", text: `Error reading audit log: ${e.message}` }],
       };
     }
+  }
+
+  if (request.params.name === "get_agent_status") {
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify(
+            {
+              projectRoot: PROJECT_ROOT,
+              policyFile: POLICY_FILE,
+              ollamaModel: getOllamaModel(),
+              alpacaExecutionEnabled: executor.isConfigured(),
+            },
+            null,
+            2
+          ),
+        },
+      ],
+    };
   }
 
   throw new Error("Unknown tool");

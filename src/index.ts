@@ -5,10 +5,12 @@ import { FinanceAgent } from './agent';
 import { PolicyEngine } from './policy';
 import { Executor } from './executor';
 import { AuditLogger } from './logger';
+import { getOllamaModel } from './config';
 
-dotenv.config();
+const PROJECT_ROOT = path.resolve(__dirname, '..');
+dotenv.config({ path: path.resolve(PROJECT_ROOT, '.env') });
 
-const POLICY_FILE = path.resolve(process.cwd(), 'policy.yaml');
+const POLICY_FILE = path.resolve(PROJECT_ROOT, 'policy.yaml');
 
 async function main() {
   console.log('=== Starting OpenClaw Finance Agent ===\n');
@@ -16,41 +18,39 @@ async function main() {
   const agent = new FinanceAgent();
   const policyEngine = new PolicyEngine(POLICY_FILE);
   const executor = new Executor();
-  const logger = new AuditLogger();
+  const logger = new AuditLogger(PROJECT_ROOT);
 
-  // Test scenarios simulating LLM inputs
+  console.log(`[Config] Ollama model: ${getOllamaModel()}`);
+  console.log(`[Config] Alpaca execution enabled: ${executor.isConfigured() ? 'yes' : 'no'}\n`);
+
   const scenarios = [
     'safely buy 1 share of AAPL',
-    'aggressive buy of 15 shares of MSFT', // Blocked by oversize policy (> 5)
-    'buy some crypto BTC',                 // Blocked by symbol policy (!['AAPL', 'MSFT', 'TSLA'].includes)
+    'aggressive buy of 15 shares of MSFT',
+    'buy some crypto BTC',
   ];
 
   for (const scenario of scenarios) {
-    // 1. Agent Reasoning -> Generates Intent Object
     const intent = await agent.generateIntent(scenario);
     logger.logIntent({ scenario, intent });
 
-    // 2. Policy Engine Evaluation (Deterministic Enforcement)
     const evaluation = policyEngine.evaluateIntent(intent);
     logger.logPolicyDecision(intent, evaluation);
     
-    // 3. Conditional Execution Based on Policy Engine Result
     if (evaluation.allowed) {
-      console.log(`✅ [Decision] Policy Engine: Intent ALLOWED`);
+      console.log('[Decision] Policy Engine: Intent ALLOWED');
       try {
-        // Checking dummy keys to prevent crash if not setup by the user
-        if (!process.env.APCA_API_KEY_ID || process.env.APCA_API_KEY_ID === 'dummy_key') {
-             console.log('⚠️  Skipping real Alpaca execution because API keys are not set in .env');
-             logger.logExecution(intent, 'SKIPPED', 'No Alpaca API Key set in .env');
+        if (!executor.isConfigured()) {
+          console.log('[Execution] Skipping Alpaca paper trade because credentials are not configured.');
+          logger.logExecution(intent, 'SKIPPED', 'No Alpaca API credentials set in .env');
         } else {
-             const receipt = await executor.executeTrade(intent);
-             logger.logExecution(intent, 'SUCCESS', { id: receipt.id });
+          const receipt = await executor.executeTrade(intent);
+          logger.logExecution(intent, 'SUCCESS', { id: receipt.id });
         }
       } catch (err: any) {
         logger.logExecution(intent, 'FAILED', err.message);
       }
     } else {
-      console.log(`❌ [Decision] Policy Engine: Intent DENIED. Reason: ${evaluation.reason} (Policy ID: ${evaluation.failedPolicyId})`);
+      console.log(`[Decision] Policy Engine: Intent DENIED. Reason: ${evaluation.reason} (Policy ID: ${evaluation.failedPolicyId})`);
       logger.logExecution(intent, 'BLOCKED_BY_POLICY', evaluation);
     }
   }

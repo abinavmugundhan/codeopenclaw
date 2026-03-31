@@ -1,12 +1,13 @@
 import { TradeIntent } from './types';
 import axios from 'axios';
+import { getOllamaModel } from './config';
+import { parseIntentHeuristically } from './parser';
 
 export class FinanceAgent {
   private ollamaUrl = 'http://127.0.0.1:11434/api/generate';
   private modelName: string;
 
-  constructor(modelName: string = 'llama3') {
-    // You can change 'llama3' to 'mistral' or whatever model you downloaded
+  constructor(modelName: string = getOllamaModel()) {
     this.modelName = modelName;
   }
 
@@ -45,16 +46,10 @@ Do not output markdown code blocks (e.g. \`\`\`json). Just the raw JSON string.`
       }
     } catch (err: any) {
       console.error(`[Agent] Ollama Request Failed. Is Ollama running? Error:`, err.message);
-      
-      // Fallback for demonstration if Ollama is not running
-      console.log(`[Agent] Falling back to simulated intent based on prompt...`);
-      if (prompt.includes('15 shares of MSFT')) {
-        return { action: 'buy', symbol: 'MSFT', quantity: 15, asset_class: 'equity' };
-      }
-      if (prompt.includes('crypto BTC')) {
-        return { action: 'buy', symbol: 'BTC', quantity: 1, asset_class: 'crypto' };
-      }
-      return { action: 'buy', symbol: 'AAPL', quantity: 1, asset_class: 'equity' };
+
+      const fallbackIntent = parseIntentHeuristically(prompt);
+      console.log(`[Agent] Falling back to heuristic intent:`, JSON.stringify(fallbackIntent));
+      return fallbackIntent;
     }
   }
 }

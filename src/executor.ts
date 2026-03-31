@@ -1,5 +1,6 @@
 import Alpaca from '@alpacahq/alpaca-trade-api';
 import { TradeIntent } from './types';
+import { hasConfiguredAlpacaCredentials } from './config';
 
 export class Executor {
   private alpaca: any;
@@ -12,7 +13,15 @@ export class Executor {
     });
   }
 
+  public isConfigured() {
+    return hasConfiguredAlpacaCredentials();
+  }
+
   public async executeTrade(intent: TradeIntent) {
+    if (!this.isConfigured()) {
+      throw new Error('Alpaca paper trading credentials are not configured.');
+    }
+
     console.log(`[Executor] Executing trade: ${intent.action.toUpperCase()} ${intent.quantity} ${intent.symbol}`);
     try {
       // Create the order using Alpaca
