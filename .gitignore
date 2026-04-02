@@ -1,0 +1,7 @@
+node_modules/
+.env
+audit.log
+dist/
+build/
+state/
+*.DS_Store

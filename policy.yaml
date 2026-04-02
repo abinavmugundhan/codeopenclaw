@@ -1,0 +1,20 @@
+policies:
+  - id: allowed_asset_classes
+    condition: "intent.asset_class == 'equity'"
+    effect: allow
+
+  - id: allowed_symbols
+    condition: "['AAPL', 'MSFT', 'TSLA'].includes(intent.symbol)"
+    effect: allow
+
+  - id: max_quantity
+    condition: "intent.quantity <= 5"
+    effect: allow
+
+  - id: block_oversize_trade
+    condition: "intent.quantity > 5"
+    effect: deny
+
+  - id: block_unknown_symbol
+    condition: "!['AAPL', 'MSFT', 'TSLA'].includes(intent.symbol)"
+    effect: deny

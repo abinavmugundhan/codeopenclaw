@@ -1,0 +1,15 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+.card {
+  @apply bg-slate-900 border border-slate-800 rounded-xl p-4 shadow;
+}
+
+.badge {
+  @apply inline-flex items-center px-2 py-1 text-xs font-semibold rounded-full;
+}
