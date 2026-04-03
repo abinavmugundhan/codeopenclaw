@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "openclaw-finance-agent": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "./node_modules/ts-node/dist/bin.js",
+        "src/mcp-server.ts"
+      ],
+      "cwd": "<ABSOLUTE_PROJECT_PATH>"
+    }
+  }
+}

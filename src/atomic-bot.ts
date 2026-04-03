@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { getAtomicBotApiKey, getAtomicBotBaseUrl } from './config';
 import { AtomicBotRequest, AtomicBotResponse } from './types';
 
 export class AtomicBotClient {
@@ -7,14 +8,14 @@ export class AtomicBotClient {
   private timeout: number;
 
   constructor(apiKey?: string, baseUrl?: string, timeout: number = 10000) {
-    this.apiKey = apiKey || process.env.ATOMIC_BOT_API_KEY || '';
-    this.baseUrl = baseUrl || process.env.ATOMIC_BOT_BASE_URL || 'https://api.atomicbot.com/v1';
+    this.apiKey = apiKey || getAtomicBotApiKey();
+    this.baseUrl = baseUrl || getAtomicBotBaseUrl();
     this.timeout = timeout;
   }
 
   private async makeRequest(endpoint: string, data: AtomicBotRequest): Promise<AtomicBotResponse> {
     if (!this.apiKey) {
-      throw new Error('Atomic Bot API key not configured. Please set ATOMIC_BOT_API_KEY environment variable.');
+      throw new Error('Atomic Bot API key not configured. Please set ARMORIQ_API_KEY or ATOMIC_BOT_API_KEY.');
     }
 
     try {

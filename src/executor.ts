@@ -39,7 +39,7 @@ export class Executor {
         time_in_force: 'gtc',
       });
       console.log(`[Executor] Alpaca order executed successfully: ${order.id}`);
-      return { source: 'alpaca', order };
+      return { source: 'alpaca' as const, order };
     } catch (e: any) {
       console.error(`[Executor] Failed to execute trade on Alpaca:`, e.message || e);
       throw e;
@@ -56,7 +56,7 @@ export class Executor {
 
       if (response.success) {
         console.log(`[Executor] Atomic Bot trade executed successfully: ${response.transactionId}`);
-        return { source: 'atomic-bot', response };
+        return { source: 'atomic-bot' as const, response };
       } else {
         console.error(`[Executor] Atomic Bot trade failed: ${response.error}`);
         throw new Error(response.error);

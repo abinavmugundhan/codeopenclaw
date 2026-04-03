@@ -1,10 +1,16 @@
-import assert from 'assert';
-import path from 'path';
+import assert from 'node:assert';
+import path from 'node:path';
 
 import { parseIntentHeuristically } from './parser';
+import { TradeLedger } from './ledger';
 import { PolicyEngine } from './policy';
 
-const policyEngine = new PolicyEngine(path.resolve(__dirname, '..', 'policy.yaml'));
+process.env.DEMO_ASSUME_MARKET_HOURS = 'true';
+
+const policyEngine = new PolicyEngine(
+  path.resolve(__dirname, '..', 'policy.yaml'),
+  new TradeLedger(path.resolve(__dirname, '..', 'state', 'trade-ledger.test.json'))
+);
 
 function testParser() {
   assert.deepStrictEqual(parseIntentHeuristically('safely buy 3 shares of TSLA'), {
@@ -45,7 +51,7 @@ function testPolicies() {
     asset_class: 'equity',
   });
   assert.strictEqual(blockedQuantity.allowed, false);
-  assert.strictEqual(blockedQuantity.failedPolicyId, 'max_quantity');
+  assert.strictEqual(blockedQuantity.failedPolicyId, 'per_order_limit');
 
   const blockedCrypto = policyEngine.evaluateIntent({
     action: 'buy',
@@ -54,7 +60,7 @@ function testPolicies() {
     asset_class: 'crypto',
   });
   assert.strictEqual(blockedCrypto.allowed, false);
-  assert.strictEqual(blockedCrypto.failedPolicyId, 'allowed_asset_classes');
+  assert.strictEqual(blockedCrypto.failedPolicyId, 'asset_class_allowed');
 }
 
 function main() {

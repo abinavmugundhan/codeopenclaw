@@ -1,28 +1,53 @@
+import dotenv from 'dotenv';
+import path from 'path';
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import dotenv from 'dotenv';
-import path from 'path';
 
 import { FinanceAgent } from './agent';
 import { PolicyEngine } from './policy';
 import { Executor } from './executor';
 import { AuditLogger } from './logger';
 import { TradeLedger } from './ledger';
+import { ExecutionRecord } from './types';
 
 dotenv.config();
 
 const POLICY_FILE = path.resolve(process.cwd(), 'policy.yaml');
 
-// Initialize OpenClaw components
+// Initialize OpenClaw-facing components.
 const agent = new FinanceAgent();
 const ledger = new TradeLedger();
 const policyEngine = new PolicyEngine(POLICY_FILE, ledger);
 const executor = new Executor();
 const logger = new AuditLogger();
+
+async function evaluateScenario(params: {
+  scenario: string;
+  actor?: string;
+  delegatedLimit?: number;
+  simulateAfterHours?: boolean;
+}) {
+  const intent = await agent.generateIntent(params.scenario);
+  if (params.actor) {
+    intent.actor = params.actor;
+  }
+  if (params.delegatedLimit != null) {
+    intent.delegated_limit = params.delegatedLimit;
+  }
+
+  const intentId = logger.logIntent(params.scenario, intent);
+  const evaluation = policyEngine.evaluateIntent(
+    intent,
+    params.simulateAfterHours ? { now: new Date(Date.UTC(2024, 0, 1, 1, 0, 0)) } : undefined
+  );
+  logger.logPolicyDecision(intentId, evaluation);
+
+  return { intent, intentId, evaluation };
+}
 
 const server = new Server(
   {
@@ -42,25 +67,52 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       {
         name: "execute_trading_scenario",
         description:
-          "Executes a natural language trading scenario through the OpenClaw Finance Agent. It will parse the intent, evaluate it against strict local YAML policies, and execute on Alpaca paper trading if allowed.",
+          "Parse a trading request, enforce YAML policies, and execute via Alpaca paper trading or Atomic Bot only if the decision is ALLOW.",
         inputSchema: {
           type: "object",
           properties: {
             scenario: {
               type: "string",
-              description: "The trading scenario in natural language, e.g. 'safely buy 1 share of AAPL'",
+              description: "Trading scenario in natural language, for example 'buy 1 share of AAPL'",
             },
             use_atomic_bot: {
               type: "boolean",
-              description: "Whether to execute via Atomic Bot API instead of Alpaca (default: false)",
+              description: "Execute via Atomic Bot instead of Alpaca.",
             },
             actor: {
               type: "string",
-              description: "Optional agent role initiating the trade (e.g., analyst, trader, risk)",
+              description: "Optional role initiating the request, such as analyst or trader.",
             },
             delegated_limit: {
               type: "number",
-              description: "Optional delegated max quantity; trade will be blocked if quantity exceeds this",
+              description: "Optional delegated maximum quantity.",
+            },
+          },
+          required: ["scenario"],
+        },
+      },
+      {
+        name: "simulate_trading_scenario",
+        description:
+          "Run the full reasoning and policy enforcement flow without executing any trade. Use this for safe demos and explanations.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            scenario: {
+              type: "string",
+              description: "Trading scenario in natural language.",
+            },
+            actor: {
+              type: "string",
+              description: "Optional role initiating the request.",
+            },
+            delegated_limit: {
+              type: "number",
+              description: "Optional delegated maximum quantity.",
+            },
+            simulate_after_hours: {
+              type: "boolean",
+              description: "Force evaluation in an after-hours context for demos.",
             },
           },
           required: ["scenario"],
@@ -68,7 +120,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: "get_audit_logs",
-        description: "Retrieves the recent audit logs of the OpenClaw Finance Agent to review executed, blocked, or skipped trades.",
+        description: "Retrieve the recent audit log tail for traceability.",
         inputSchema: {
           type: "object",
           properties: {},
@@ -76,7 +128,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: "get_atomic_bot_balance",
-        description: "Retrieves the account balance from Atomic Bot API.",
+        description: "Retrieve the account balance from Atomic Bot.",
         inputSchema: {
           type: "object",
           properties: {},
@@ -84,26 +136,27 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: "get_atomic_bot_history",
-        description: "Retrieves transaction history from Atomic Bot API.",
+        description: "Retrieve transaction history from Atomic Bot.",
         inputSchema: {
           type: "object",
           properties: {
             symbol: {
               type: "string",
-              description: "Optional symbol to filter history by (e.g. 'AAPL')",
+              description: "Optional symbol filter, for example 'AAPL'.",
             },
           },
         },
       },
       {
         name: "llm_to_atomic_bot",
-        description: "Direct LLM-to-Atomic Bot API connection. The LLM generates the API call and executes it directly on Atomic Bot.",
+        description:
+          "Generate an Atomic Bot request from natural language, but still enforce the same policy layer before any execution.",
         inputSchema: {
           type: "object",
           properties: {
             prompt: {
               type: "string",
-              description: "Natural language trading request that the LLM will convert to Atomic Bot API call",
+              description: "Natural-language trading request.",
             },
           },
           required: ["prompt"],
@@ -117,83 +170,77 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   if (request.params.name === "execute_trading_scenario") {
     const scenario = String(request.params.arguments?.scenario);
     const useAtomicBot = Boolean(request.params.arguments?.use_atomic_bot) || false;
-    
+
     if (!scenario) {
       throw new Error("Scenario is required");
     }
 
     try {
-      // 1. Agent Reasoning -> Generates Intent Object
-      const intent = await agent.generateIntent(scenario);
-      // Optional overrides passed explicitly
-      if (request.params.arguments?.actor) {
-        intent.actor = String(request.params.arguments.actor);
-      }
-      if (request.params.arguments?.delegated_limit != null) {
-        intent.delegated_limit = Number(request.params.arguments.delegated_limit);
-      }
-      const intentId = logger.logIntent(scenario, intent);
+      const { intent, intentId, evaluation } = await evaluateScenario({
+        scenario,
+        actor: request.params.arguments?.actor ? String(request.params.arguments.actor) : undefined,
+        delegatedLimit: request.params.arguments?.delegated_limit != null
+          ? Number(request.params.arguments.delegated_limit)
+          : undefined,
+      });
 
-      // 2. Policy Engine Evaluation (Deterministic Enforcement)
-      const evaluation = policyEngine.evaluateIntent(intent);
-      logger.logPolicyDecision(intentId, evaluation);
-      
-      // 3. Conditional Execution Based on Policy Engine Result
-      if (evaluation.decision === 'ALLOW') {
-        if (useAtomicBot && !executor.atomicBot.isConfigured()) {
-          logger.logExecution(intentId, { status: 'SKIPPED', details: 'Atomic Bot requested but not configured' });
-          return {
-            content: [
-              {
-                type: "text",
-                text: `✅ Intent ALLOWED by policies: ${JSON.stringify(intent)}\n⚠️ SKIPPED execution because Atomic Bot API key is not set in .env.`,
-              },
-            ],
-          };
-        } else if (!useAtomicBot && (!process.env.APCA_API_KEY_ID || process.env.APCA_API_KEY_ID === 'YOUR_PAPER_KEY')) {
-          logger.logExecution(intentId, { status: 'SKIPPED', details: 'No Alpaca API key set in .env' });
-          return {
-            content: [
-              {
-                type: "text",
-                text: `✅ Intent ALLOWED by policies: ${JSON.stringify(intent)}\n⚠️ SKIPPED execution because no real Alpaca API key is set in .env.`,
-              },
-            ],
-          };
-          } else {
-          try {
-             const receipt = await executor.executeTrade(intent, useAtomicBot);
-             const orderId = 'order' in receipt ? receipt.order.id : receipt.response.transactionId;
-             ledger.recordExecution(intent);
-             logger.logExecution(intentId, { status: 'SUCCESS', backend: receipt.source, details: { id: orderId } });
-             return {
-              content: [
-                {
-                  type: "text",
-                  text: `✅ Intent ALLOWED by policies: ${JSON.stringify(intent)}\n✅ Trade executed successfully via ${receipt.source}! Order ID: ${orderId}`,
-                },
-              ],
-            };
-          } catch (err: any) {
-             logger.logExecution(intentId, { status: 'FAILED', details: err.message });
-             return {
-              content: [
-                {
-                  type: "text",
-                  text: `✅ Intent ALLOWED by policies: ${JSON.stringify(intent)}\n❌ Trade execution failed: ${err.message}`,
-                },
-              ],
-             };
-          }
-        }
-      } else {
+      if (evaluation.decision !== 'ALLOW') {
         logger.logExecution(intentId, { status: 'BLOCKED', details: evaluation });
-        const topReason = evaluation.reasons.find((r) => r.result === 'FAIL');
+        const topReason = evaluation.reasons.find((reason) => reason.result === 'FAIL');
         return {
           content: [
             {
               type: "text",
-              text: `❌ Intent DENIED by policies: ${JSON.stringify(intent)}\nReason: ${topReason?.message || evaluation.failedPolicyId || 'Policy failure'}`,
+              text: `DENY: ${JSON.stringify(intent)}\nReason: ${topReason?.message || evaluation.failedPolicyId || 'Policy failure'}`,
+            },
+          ],
+        };
+      }
+
+      if (useAtomicBot && !executor.atomicBot.isConfigured()) {
+        logger.logExecution(intentId, { status: 'SKIPPED', details: 'Atomic Bot requested but not configured' });
+        return {
+          content: [
+            {
+              type: "text",
+              text: `ALLOW: ${JSON.stringify(intent)}\nSKIPPED: Atomic Bot API key is not set in .env.`,
+            },
+          ],
+        };
+      }
+
+      if (!useAtomicBot && (!process.env.APCA_API_KEY_ID || process.env.APCA_API_KEY_ID === 'YOUR_PAPER_KEY')) {
+        logger.logExecution(intentId, { status: 'SKIPPED', details: 'No Alpaca API key set in .env' });
+        return {
+          content: [
+            {
+              type: "text",
+              text: `ALLOW: ${JSON.stringify(intent)}\nSKIPPED: No real Alpaca API key is set in .env.`,
+            },
+          ],
+        };
+      }
+
+      try {
+        const receipt = await executor.executeTrade(intent, useAtomicBot);
+        const orderId = 'order' in receipt ? receipt.order.id : receipt.response.transactionId;
+        ledger.recordExecution(intent);
+        logger.logExecution(intentId, { status: 'SUCCESS', backend: receipt.source, details: { id: orderId } });
+        return {
+          content: [
+            {
+              type: "text",
+              text: `ALLOW: ${JSON.stringify(intent)}\nSUCCESS: Trade executed via ${receipt.source}. Order ID: ${orderId}`,
+            },
+          ],
+        };
+      } catch (err: any) {
+        logger.logExecution(intentId, { status: 'FAILED', details: err.message });
+        return {
+          content: [
+            {
+              type: "text",
+              text: `ALLOW: ${JSON.stringify(intent)}\nFAILED: Trade execution failed: ${err.message}`,
             },
           ],
         };
@@ -204,6 +251,53 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           {
             type: "text",
             text: `Error processing scenario: ${error.message}`,
+          },
+        ],
+        isError: true,
+      };
+    }
+  }
+
+  if (request.params.name === "simulate_trading_scenario") {
+    const scenario = String(request.params.arguments?.scenario);
+    if (!scenario) {
+      throw new Error("Scenario is required");
+    }
+
+    try {
+      const { intent, intentId, evaluation } = await evaluateScenario({
+        scenario,
+        actor: request.params.arguments?.actor ? String(request.params.arguments.actor) : undefined,
+        delegatedLimit: request.params.arguments?.delegated_limit != null
+          ? Number(request.params.arguments.delegated_limit)
+          : undefined,
+        simulateAfterHours: Boolean(request.params.arguments?.simulate_after_hours),
+      });
+
+      const execution: ExecutionRecord = evaluation.decision === 'ALLOW'
+        ? { status: 'SKIPPED', details: 'Simulation only; no execution attempted.' }
+        : { status: 'BLOCKED', details: evaluation };
+      logger.logExecution(intentId, execution);
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              scenario,
+              intent,
+              evaluation,
+              execution,
+            }, null, 2),
+          },
+        ],
+      };
+    } catch (error: any) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error simulating scenario: ${error.message}`,
           },
         ],
         isError: true,
@@ -225,7 +319,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       };
     } catch (e: any) {
       return {
-         content: [{ type: "text", text: `Error reading audit log: ${e.message}` }],
+        content: [{ type: "text", text: `Error reading audit log: ${e.message}` }],
       };
     }
   }
@@ -287,10 +381,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     try {
       console.log(`[MCP] Direct LLM-to-Atomic Bot API request: "${prompt}"`);
-      const intent = await agent.generateIntent(prompt);
-      const intentId = logger.logIntent(prompt, intent);
-      const evaluation = policyEngine.evaluateIntent(intent);
-      logger.logPolicyDecision(intentId, evaluation);
+      const { intent, intentId, evaluation } = await evaluateScenario({ scenario: prompt });
 
       if (evaluation.decision !== 'ALLOW') {
         logger.logExecution(intentId, { status: 'BLOCKED', details: evaluation });
@@ -298,7 +389,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           content: [
             {
               type: "text",
-              text: `❌ Intent DENIED by policies. First failing rule: ${evaluation.reasons.find(r => r.result === 'FAIL')?.rule ?? evaluation.failedPolicyId}`,
+              text: `DENY: First failing rule: ${evaluation.reasons.find((reason) => reason.result === 'FAIL')?.rule ?? evaluation.failedPolicyId}`,
             },
           ],
         };
@@ -310,7 +401,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           content: [
             {
               type: "text",
-              text: `✅ Intent allowed but Atomic Bot not configured. Skipping execution.`,
+              text: `ALLOW: ${JSON.stringify(intent)}\nSKIPPED: Atomic Bot is not configured.`,
             },
           ],
         };
@@ -327,7 +418,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         content: [
           {
             type: "text",
-            text: `🤖 LLM-to-Atomic Bot Direct API Connection\n\n📝 User Request: "${prompt}"\n🔧 LLM Generated API Call: ${JSON.stringify(result.llmRequest)}\n📊 Atomic Bot Response: ${JSON.stringify(result.apiResponse)}`,
+            text: `LLM-to-Atomic Bot Direct API Connection\n\nUser Request: "${prompt}"\nGenerated API Call: ${JSON.stringify(result.llmRequest)}\nAtomic Bot Response: ${JSON.stringify(result.apiResponse)}`,
           },
         ],
       };
@@ -337,7 +428,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         content: [
           {
             type: "text",
-            text: `❌ LLM-to-Atomic Bot API failed: ${error.message}`,
+            text: `FAILED: LLM-to-Atomic Bot API failed: ${error.message}`,
           },
         ],
         isError: true,

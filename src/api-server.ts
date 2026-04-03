@@ -20,11 +20,13 @@ if (process.env.DEMO_ASSUME_MARKET_HOURS === undefined) {
 
 const app = express();
 const PORT = Number(process.env.API_PORT || 4789);
+const repoRoot = path.resolve(__dirname, '..');
+const dashboardDist = path.resolve(repoRoot, 'dashboard', 'dist');
 
 // Initialize components
 const agent = new FinanceAgent();
 const ledger = new TradeLedger();
-const policyEngine = new PolicyEngine(path.resolve(process.cwd(), 'policy.yaml'), ledger);
+const policyEngine = new PolicyEngine(path.resolve(repoRoot, 'policy.yaml'), ledger);
 const executor = new Executor();
 const logger = new AuditLogger();
 
@@ -149,7 +151,7 @@ app.get('/api/policy/evaluation/:id', (req, res) => {
 // Policy config (yaml -> json)
 app.get('/api/policy/json', (_req, res) => {
   try {
-    const policyContent = fs.readFileSync(path.resolve(process.cwd(), 'policy.yaml'), 'utf8');
+    const policyContent = fs.readFileSync(path.resolve(repoRoot, 'policy.yaml'), 'utf8');
     const parsed = yaml.load(policyContent);
     res.json(parsed);
   } catch (error: any) {
@@ -265,7 +267,22 @@ app.get('/api/atomic-history', async (_req, res) => {
   }
 });
 
+if (fs.existsSync(dashboardDist)) {
+  app.use(express.static(dashboardDist));
+  app.get('/', (_req, res) => {
+    res.sendFile(path.join(dashboardDist, 'index.html'));
+  });
+  app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/api')) return next();
+    res.sendFile(path.join(dashboardDist, 'index.html'));
+  });
+}
+
 app.listen(PORT, () => {
   console.log(`🚀 OpenClaw API Server running on http://localhost:${PORT}`);
-  console.log(`📊 Dashboard available at: http://localhost:4173`);
+  if (fs.existsSync(dashboardDist)) {
+    console.log(`📊 Dashboard available at: http://localhost:${PORT}`);
+  } else {
+    console.log(`📊 Dashboard dev server expected at: http://localhost:4173`);
+  }
 });
