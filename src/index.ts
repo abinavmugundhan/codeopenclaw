@@ -36,32 +36,32 @@ async function main() {
       intent.actor = scenario.actor;
       intent.delegated_limit = scenario.delegated_limit;
     }
-    logger.logIntent({ scenario, intent });
+    const intentId = logger.logIntent(typeof scenario === 'string' ? scenario : scenario.text, intent);
 
     // 2. Policy Engine Evaluation (Deterministic Enforcement)
     const evaluation = policyEngine.evaluateIntent(intent);
-    logger.logPolicyDecision(intent, evaluation);
+    logger.logPolicyDecision(intentId, evaluation);
     
     // 3. Conditional Execution Based on Policy Engine Result
-    if (evaluation.allowed) {
+    if (evaluation.decision === 'ALLOW') {
       console.log(`✅ [Decision] Policy Engine: Intent ALLOWED`);
       try {
         // Checking dummy keys to prevent crash if not setup by the user
         if (!process.env.APCA_API_KEY_ID || process.env.APCA_API_KEY_ID === 'dummy_key') {
              console.log('⚠️  Skipping real Alpaca execution because API keys are not set in .env');
-             logger.logExecution(intent, 'SKIPPED', 'No Alpaca API Key set in .env');
+             logger.logExecution(intentId, { status: 'SKIPPED', details: 'No Alpaca API Key set in .env' });
         } else {
              const receipt = await executor.executeTrade(intent);
              ledger.recordExecution(intent);
              const orderId = 'order' in receipt ? receipt.order.id : receipt.response.transactionId;
-             logger.logExecution(intent, 'SUCCESS', { source: receipt.source, id: orderId });
+             logger.logExecution(intentId, { status: 'SUCCESS', backend: receipt.source, details: { id: orderId } });
         }
       } catch (err: any) {
-        logger.logExecution(intent, 'FAILED', err.message);
+        logger.logExecution(intentId, { status: 'FAILED', details: err.message });
       }
     } else {
-      console.log(`❌ [Decision] Policy Engine: Intent DENIED. Reason: ${evaluation.reason} (Policy ID: ${evaluation.failedPolicyId})`);
-      logger.logExecution(intent, 'BLOCKED_BY_POLICY', evaluation);
+      console.log(`❌ [Decision] Policy Engine: Intent DENIED. Reason: ${evaluation.failedPolicyId}`);
+      logger.logExecution(intentId, { status: 'BLOCKED', details: evaluation });
     }
   }
 

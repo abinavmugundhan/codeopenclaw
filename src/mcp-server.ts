@@ -132,16 +132,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       if (request.params.arguments?.delegated_limit != null) {
         intent.delegated_limit = Number(request.params.arguments.delegated_limit);
       }
-      logger.logIntent({ scenario, intent });
+      const intentId = logger.logIntent(scenario, intent);
 
       // 2. Policy Engine Evaluation (Deterministic Enforcement)
       const evaluation = policyEngine.evaluateIntent(intent);
-      logger.logPolicyDecision(intent, evaluation);
+      logger.logPolicyDecision(intentId, evaluation);
       
       // 3. Conditional Execution Based on Policy Engine Result
-      if (evaluation.allowed) {
+      if (evaluation.decision === 'ALLOW') {
         if (useAtomicBot && !executor.atomicBot.isConfigured()) {
-          logger.logExecution(intent, 'SKIPPED', 'Atomic Bot requested but not configured');
+          logger.logExecution(intentId, { status: 'SKIPPED', details: 'Atomic Bot requested but not configured' });
           return {
             content: [
               {
@@ -151,7 +151,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             ],
           };
         } else if (!useAtomicBot && (!process.env.APCA_API_KEY_ID || process.env.APCA_API_KEY_ID === 'YOUR_PAPER_KEY')) {
-          logger.logExecution(intent, 'SKIPPED', 'No Alpaca API Key set in .env');
+          logger.logExecution(intentId, { status: 'SKIPPED', details: 'No Alpaca API key set in .env' });
           return {
             content: [
               {
@@ -165,7 +165,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
              const receipt = await executor.executeTrade(intent, useAtomicBot);
              const orderId = 'order' in receipt ? receipt.order.id : receipt.response.transactionId;
              ledger.recordExecution(intent);
-             logger.logExecution(intent, 'SUCCESS', { source: receipt.source, id: orderId });
+             logger.logExecution(intentId, { status: 'SUCCESS', backend: receipt.source, details: { id: orderId } });
              return {
               content: [
                 {
@@ -175,7 +175,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               ],
             };
           } catch (err: any) {
-             logger.logExecution(intent, 'FAILED', err.message);
+             logger.logExecution(intentId, { status: 'FAILED', details: err.message });
              return {
               content: [
                 {
@@ -187,12 +187,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           }
         }
       } else {
-        logger.logExecution(intent, 'BLOCKED_BY_POLICY', evaluation);
+        logger.logExecution(intentId, { status: 'BLOCKED', details: evaluation });
+        const topReason = evaluation.reasons.find((r) => r.result === 'FAIL');
         return {
           content: [
             {
               type: "text",
-              text: `❌ Intent DENIED by policies: ${JSON.stringify(intent)}\nReason: ${evaluation.reason} (Policy ID: ${evaluation.failedPolicyId})`,
+              text: `❌ Intent DENIED by policies: ${JSON.stringify(intent)}\nReason: ${topReason?.message || evaluation.failedPolicyId || 'Policy failure'}`,
             },
           ],
         };
@@ -286,13 +287,41 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     try {
       console.log(`[MCP] Direct LLM-to-Atomic Bot API request: "${prompt}"`);
-      
-      // LLM directly calls Atomic Bot API
+      const intent = await agent.generateIntent(prompt);
+      const intentId = logger.logIntent(prompt, intent);
+      const evaluation = policyEngine.evaluateIntent(intent);
+      logger.logPolicyDecision(intentId, evaluation);
+
+      if (evaluation.decision !== 'ALLOW') {
+        logger.logExecution(intentId, { status: 'BLOCKED', details: evaluation });
+        return {
+          content: [
+            {
+              type: "text",
+              text: `❌ Intent DENIED by policies. First failing rule: ${evaluation.reasons.find(r => r.result === 'FAIL')?.rule ?? evaluation.failedPolicyId}`,
+            },
+          ],
+        };
+      }
+
+      if (!executor.atomicBot.isConfigured()) {
+        logger.logExecution(intentId, { status: 'SKIPPED', details: 'Atomic Bot not configured' });
+        return {
+          content: [
+            {
+              type: "text",
+              text: `✅ Intent allowed but Atomic Bot not configured. Skipping execution.`,
+            },
+          ],
+        };
+      }
+
       const result = await agent.executeWithAtomicBot(prompt);
-      
-      // Log the interaction
-      logger.logIntent({ scenario: prompt, intent: result.llmRequest });
-      logger.logExecution(result.llmRequest, result.apiResponse.success ? 'SUCCESS' : 'FAILED', result.apiResponse);
+      logger.logExecution(intentId, {
+        status: result.apiResponse.success ? 'SUCCESS' : 'FAILED',
+        backend: 'atomic-bot',
+        details: result.apiResponse,
+      });
 
       return {
         content: [

@@ -1,17 +1,11 @@
 export interface TradeIntent {
-  action: 'buy' | 'sell';
+  action: 'buy' | 'sell' | 'analyze' | 'status';
   symbol: string;
   quantity: number;
   asset_class: string;
   actor?: string;              // which agent/role initiated the intent (e.g., analyst, trader)
   delegated_by?: string;       // who delegated the authority (optional)
   delegated_limit?: number;    // max quantity permitted under delegation (optional)
-}
-
-export interface PolicyResult {
-  allowed: boolean;
-  reason?: string;
-  failedPolicyId?: string;
 }
 
 export interface AtomicBotRequest {
@@ -40,7 +34,7 @@ export interface PolicyRule {
 export interface PolicyLimits {
   approved_symbols: string[];
   allowed_asset_classes: string[];
-  allowed_actions: Array<'buy' | 'sell'>;
+  allowed_actions: Array<'buy' | 'sell' | 'analyze' | 'status'>;
   allowed_actors: string[];
   per_order_max_qty: number;
   daily_max_qty: number;
@@ -52,4 +46,45 @@ export interface PolicyLimits {
 export interface PolicyConfig {
   limits: PolicyLimits;
   policies: PolicyRule[];
+}
+
+export type RuleResult = 'PASS' | 'FAIL';
+
+export interface PolicyReason {
+  rule: string;
+  result: RuleResult;
+  message: string;
+  effect?: 'allow' | 'deny';
+}
+
+export interface PolicyEvaluation {
+  id: string;
+  decision: 'ALLOW' | 'DENY';
+  reasons: PolicyReason[];
+  failedPolicyId?: string;
+  allowed: boolean;
+}
+
+export interface ExecutionRecord {
+  status: 'SUCCESS' | 'FAILED' | 'SKIPPED' | 'BLOCKED';
+  backend?: 'alpaca' | 'atomic-bot';
+  details?: any;
+}
+
+export type AuditEventType = 'INTENT' | 'POLICY' | 'EXECUTION';
+
+export interface AuditEvent {
+  id: string;
+  intentId: string;
+  type: AuditEventType;
+  timestamp: string;
+  payload: any;
+  tag?: string;
+}
+
+export interface IntentRecord {
+  id: string;
+  scenario: string;
+  intent: TradeIntent;
+  createdAt: string;
 }

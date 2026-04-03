@@ -18,6 +18,9 @@ export class Executor {
 
   public async executeTrade(intent: TradeIntent, useAtomicBot: boolean = false) {
     console.log(`[Executor] Executing trade via ${useAtomicBot ? 'Atomic Bot' : 'Alpaca'}: ${intent.action.toUpperCase()} ${intent.quantity} ${intent.symbol}`);
+    if (intent.action !== 'buy' && intent.action !== 'sell') {
+      throw new Error(`Unsupported action "${intent.action}" for execution`);
+    }
     
     if (useAtomicBot && this.atomicBot.isConfigured()) {
       return this.executeAtomicBotTrade(intent);
@@ -76,5 +79,13 @@ export class Executor {
       throw new Error('Atomic Bot API not configured');
     }
     return this.atomicBot.getTransactionHistory(symbol);
+  }
+
+  public isConfigured(): boolean {
+    return Boolean(
+      process.env.APCA_API_KEY_ID &&
+      process.env.APCA_API_SECRET_KEY &&
+      process.env.APCA_API_KEY_ID !== 'YOUR_PAPER_KEY'
+    );
   }
 }

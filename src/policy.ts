@@ -1,7 +1,8 @@
 import fs from 'fs';
 import yaml from 'js-yaml';
 import path from 'path';
-import { TradeIntent, PolicyResult, PolicyConfig } from './types';
+import { randomUUID } from 'crypto';
+import { TradeIntent, PolicyEvaluation, PolicyConfig, PolicyReason } from './types';
 import { TradeLedger } from './ledger';
 
 type PolicyPredicate = (intent: TradeIntent) => boolean;
@@ -10,6 +11,7 @@ export class PolicyEngine {
   private config: PolicyConfig;
   private ledger: TradeLedger;
   private predicates: Record<string, PolicyPredicate>;
+  private nowOverride?: Date;
 
   constructor(policyFilePath: string, ledger: TradeLedger) {
     this.ledger = ledger;
@@ -24,7 +26,7 @@ export class PolicyEngine {
       limits: {
         approved_symbols: ['AAPL', 'MSFT', 'TSLA'],
         allowed_asset_classes: ['equity'],
-        allowed_actions: ['buy', 'sell'],
+        allowed_actions: ['buy', 'sell', 'analyze', 'status'],
         allowed_actors: ['analyst', 'trader', 'risk', 'system'],
         per_order_max_qty: 5,
         daily_max_qty: 20,
@@ -74,7 +76,8 @@ export class PolicyEngine {
 
       market_hours: () => {
         if (!limits.market_hours_only) return true;
-        const now = new Date();
+        if (!this.nowOverride && process.env.DEMO_ASSUME_MARKET_HOURS === 'true') return true;
+        const now = this.nowOverride ?? new Date();
         const ny = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }));
         const h = ny.getHours();
         const m = ny.getMinutes();
@@ -104,9 +107,50 @@ export class PolicyEngine {
     };
   }
 
-  public evaluateIntent(intent: TradeIntent): PolicyResult {
-    console.log(`[PolicyEngine] Evaluating intent...`);
+  private buildReason(policyId: string, effect: 'allow' | 'deny', passed: boolean, intent: TradeIntent): PolicyReason {
+    const defaultMsg = passed ? 'Passed policy' : 'Failed policy';
+    const messages: Record<string, string> = {
+      per_order_limit: passed
+        ? 'Within per-order max quantity'
+        : `Order size exceeds per-order max`,
+      daily_limit: passed
+        ? 'Within daily aggregate limit'
+        : 'Would breach daily aggregate limit',
+      per_symbol_daily_limit: passed
+        ? 'Within per-symbol daily limit'
+        : 'Would breach per-symbol daily limit',
+      market_hours: passed
+        ? 'Within market hours'
+        : 'Outside market hours',
+      symbol_allowed: passed
+        ? 'Symbol is approved'
+        : 'Symbol not in allowlist',
+      asset_class_allowed: passed
+        ? 'Asset class is allowed'
+        : 'Asset class not allowed',
+      actor_allowed: passed
+        ? 'Actor is allowed'
+        : 'Actor not allowed',
+      delegation_limit: passed
+        ? 'Within delegated limit'
+        : 'Exceeds delegated limit',
+      blackout_window: passed
+        ? 'Not in blackout window'
+        : 'Inside blackout window',
+    };
+    return {
+      rule: policyId,
+      result: passed ? 'PASS' : 'FAIL',
+      message: messages[policyId] ?? defaultMsg,
+      effect,
+    };
+  }
 
+  public evaluateIntent(intent: TradeIntent, opts?: { now?: Date }): PolicyEvaluation {
+    console.log(`[PolicyEngine] Evaluating intent...`);
+    this.nowOverride = opts?.now;
+    const reasons: PolicyReason[] = [];
+    let failedPolicyId: string | undefined;
     for (const policy of this.config.policies) {
       const check = this.predicates[policy.condition];
       if (!check) {
@@ -115,16 +159,23 @@ export class PolicyEngine {
       }
       const result = check(intent);
 
-      if (policy.effect === 'deny' && result) {
-        return { allowed: false, reason: policy.description || 'Denied by policy', failedPolicyId: policy.id };
-      }
+      const passed = policy.effect === 'allow' ? result : !result;
+      reasons.push(this.buildReason(policy.id, policy.effect, passed, intent));
 
-      if (policy.effect === 'allow' && !result) {
-        return { allowed: false, reason: policy.description || 'Failed allow policy', failedPolicyId: policy.id };
+      if (!passed && !failedPolicyId) {
+        failedPolicyId = policy.id;
       }
     }
 
-    return { allowed: true };
+    const allowed = !failedPolicyId;
+    this.nowOverride = undefined;
+    return {
+      id: randomUUID(),
+      decision: allowed ? 'ALLOW' : 'DENY',
+      reasons,
+      failedPolicyId,
+      allowed,
+    };
   }
 
   /**

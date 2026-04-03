@@ -40,3 +40,47 @@ export type PortfolioSummary = {
   balance?: any
   history?: any
 }
+
+export type PolicyReason = {
+  rule: string
+  result: 'PASS' | 'FAIL'
+  message: string
+  effect?: 'allow' | 'deny'
+}
+
+export type PolicyEvaluation = {
+  id: string
+  decision: 'ALLOW' | 'DENY'
+  reasons: PolicyReason[]
+  failedPolicyId?: string
+  allowed: boolean
+}
+
+export type ExecutionRecord = {
+  status: 'SUCCESS' | 'FAILED' | 'SKIPPED' | 'BLOCKED'
+  backend?: 'alpaca' | 'atomic-bot'
+  details?: any
+}
+
+export type IntentRecord = {
+  id: string
+  scenario: string
+  intent: any
+  createdAt: string
+}
+
+export type AuditEvent = {
+  id: string
+  intentId: string
+  type: 'INTENT' | 'POLICY' | 'EXECUTION'
+  timestamp: string
+  payload: any
+}
+
+export type ScenarioResult = {
+  intentId: string
+  intent: any
+  evaluation: PolicyEvaluation
+  execution: ExecutionRecord | null
+  preset?: string
+}
