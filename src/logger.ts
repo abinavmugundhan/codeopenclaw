@@ -4,8 +4,8 @@ import path from 'path';
 export class AuditLogger {
   private logFile: string;
 
-  constructor(baseDir?: string) {
-    this.logFile = path.resolve(baseDir ?? process.cwd(), 'audit.log');
+  constructor() {
+    this.logFile = path.resolve(process.cwd(), 'audit.log');
     // Ensure appending starts with a divider
     fs.appendFileSync(this.logFile, `\n--- Session Start ---\n`, 'utf8');
   }

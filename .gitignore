@@ -3,4 +3,5 @@ node_modules/
 audit.log
 dist/
 build/
+state/
 *.DS_Store
