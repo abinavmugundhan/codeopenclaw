@@ -49,11 +49,15 @@ export interface PolicyConfig {
 }
 
 export type RuleResult = 'PASS' | 'FAIL';
+export type RuleSeverity = 'LOW' | 'MEDIUM' | 'HIGH';
+export type ThreatType = 'RISK_LIMIT' | 'TIME_VIOLATION' | 'UNAUTHORIZED_ASSET' | 'POLICY_BREACH';
 
 export interface PolicyReason {
   rule: string;
   result: RuleResult;
   message: string;
+  severity: RuleSeverity;
+  threat_type?: ThreatType;
   effect?: 'allow' | 'deny';
 }
 
@@ -61,6 +65,7 @@ export interface PolicyEvaluation {
   id: string;
   decision: 'ALLOW' | 'DENY';
   reasons: PolicyReason[];
+  security_tags: string[];
   failedPolicyId?: string;
   allowed: boolean;
 }
@@ -79,6 +84,9 @@ export interface AuditEvent {
   type: AuditEventType;
   timestamp: string;
   payload: any;
+  threat_type?: ThreatType;
+  decision_reason?: string;
+  explanation?: string;
   tag?: string;
 }
 
@@ -87,4 +95,11 @@ export interface IntentRecord {
   scenario: string;
   intent: TradeIntent;
   createdAt: string;
+}
+
+export interface SecurityStatus {
+  total_allowed: number;
+  total_blocked: number;
+  violations_by_type: Record<ThreatType, number>;
+  enforced: boolean;
 }

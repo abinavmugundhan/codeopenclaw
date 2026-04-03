@@ -10,7 +10,7 @@ import { PolicyEngine } from './policy';
 import { Executor } from './executor';
 import { AuditLogger } from './logger';
 import { TradeLedger } from './ledger';
-import { AuditEvent, ExecutionRecord, IntentRecord, PolicyEvaluation, TradeIntent } from './types';
+import { AuditEvent, ExecutionRecord, IntentRecord, PolicyEvaluation, TradeIntent, SecurityStatus, ThreatType } from './types';
 
 dotenv.config();
 // Demo-friendly default: assume market hours unless explicitly disabled
@@ -51,6 +51,38 @@ const parseJsonFile = (file: string, fallback: any) => {
     return fallback;
   }
 };
+
+function summarizeSecurity(events: AuditEvent[]): SecurityStatus {
+  const status: SecurityStatus = {
+    total_allowed: 0,
+    total_blocked: 0,
+    violations_by_type: {
+      RISK_LIMIT: 0,
+      TIME_VIOLATION: 0,
+      UNAUTHORIZED_ASSET: 0,
+      POLICY_BREACH: 0,
+    },
+    enforced: true,
+  };
+  for (const evt of events) {
+    if (evt.type === 'POLICY') {
+      const decision = evt.payload?.decision;
+      if (decision === 'ALLOW') status.total_allowed += 1;
+      if (decision === 'DENY') status.total_blocked += 1;
+      const reasons: any[] = evt.payload?.reasons || [];
+      const failing = reasons.filter((r) => r.result === 'FAIL');
+      for (const r of failing) {
+        const t = (r.threat_type || 'POLICY_BREACH') as ThreatType;
+        status.violations_by_type[t] = (status.violations_by_type[t] || 0) + 1;
+      }
+    }
+    if (evt.type === 'EXECUTION' && evt.payload?.status === 'BLOCKED' && evt.threat_type) {
+      status.violations_by_type[evt.threat_type] = (status.violations_by_type[evt.threat_type] || 0) + 1;
+      status.total_blocked += 1;
+    }
+  }
+  return status;
+}
 
 async function processScenario(options: {
   scenario: string;
@@ -140,6 +172,14 @@ app.get('/api/audit/timeline', (req, res) => {
   const limit = Number(req.query.limit || 200);
   const events = logger.readTimeline(limit);
   res.json({ events });
+});
+
+// Security status
+app.get('/api/security/status', (req, res) => {
+  const limit = Number(req.query.limit || 400);
+  const events = logger.readTimeline(limit);
+  const summary = summarizeSecurity(events);
+  res.json(summary);
 });
 
 // Legacy audit (returns text lines derived from JSON)

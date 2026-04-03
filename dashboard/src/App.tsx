@@ -1,14 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
   AuditEvent,
-  ExecutionRecord,
   IntentRecord,
   LedgerSnapshot,
   PolicyConfig,
-  PolicyEvaluation,
   PolicyReason,
   PortfolioSummary,
   ScenarioResult,
+  SecurityStatus,
 } from './types'
 
 const fetchJSON = async <T,>(path: string, init?: RequestInit): Promise<T> => {
@@ -18,34 +17,43 @@ const fetchJSON = async <T,>(path: string, init?: RequestInit): Promise<T> => {
 }
 
 const presets = [
-  { key: 'valid', label: 'Valid Trade', tone: 'green' },
-  { key: 'oversized', label: 'Oversized Trade', tone: 'orange' },
-  { key: 'restricted', label: 'Restricted Asset', tone: 'red' },
-  { key: 'afterhours', label: 'After Market Hours', tone: 'purple' },
+  { key: 'valid', label: 'Valid Trade', tone: 'green', desc: 'Happy path within limits', expect: 'ALLOW' },
+  { key: 'oversized', label: 'Risk Violation (Oversized)', tone: 'orange', desc: 'Quantity beyond per-order cap', expect: 'DENY' },
+  { key: 'restricted', label: 'Unauthorized Asset', tone: 'red', desc: 'Symbol not on allowlist', expect: 'DENY' },
+  { key: 'afterhours', label: 'After-Hours Violation', tone: 'purple', desc: 'Outside market hours', expect: 'DENY' },
 ]
 
-function Badge({ text, tone = 'slate' }: { text: string; tone?: 'green' | 'red' | 'orange' | 'slate' | 'purple' }) {
+const iconForType: Record<string, string> = {
+  INTENT: '🧠',
+  POLICY: '🛡',
+  EXECUTION: '⚙',
+}
+
+function Badge({ text, tone = 'slate' }: { text: string; tone?: 'green' | 'red' | 'orange' | 'slate' | 'purple' | 'yellow' }) {
   const tones: Record<string, string> = {
     green: 'bg-emerald-500/20 text-emerald-200 border border-emerald-500/30',
     red: 'bg-red-500/20 text-red-200 border border-red-500/30',
     orange: 'bg-orange-500/20 text-orange-200 border border-orange-500/30',
     slate: 'bg-slate-700/50 text-slate-100 border border-slate-600',
     purple: 'bg-purple-500/20 text-purple-200 border border-purple-500/30',
+    yellow: 'bg-amber-500/20 text-amber-200 border border-amber-500/30',
   }
   return <span className={`text-xs px-2 py-1 rounded-full font-semibold ${tones[tone] || tones.slate}`}>{text}</span>
 }
 
 function ReasonRow({ reason }: { reason: PolicyReason }) {
   const tone = reason.result === 'PASS' ? 'green' : 'red'
+  const sevTone = reason.severity === 'HIGH' ? 'red' : reason.severity === 'MEDIUM' ? 'orange' : 'slate'
   return (
-    <div className="flex items-start justify-between border border-slate-800 rounded-lg px-3 py-2 bg-slate-900/60">
-      <div>
+    <div className="flex items-start justify-between border border-slate-800 rounded-lg px-3 py-2 bg-slate-900/60" title={reason.message}>
+      <div className="space-y-1">
         <div className="flex items-center gap-2">
           <Badge text={reason.result} tone={tone} />
-          <span className="font-semibold text-sm">{reason.rule}</span>
-          <span className="text-[10px] uppercase tracking-wide text-slate-500">{reason.effect}</span>
+          <Badge text={reason.severity} tone={sevTone} />
+          {reason.threat_type && <Badge text={reason.threat_type} tone="purple" />}
+          <span className="font-semibold text-sm">Security Constraint: {reason.rule}</span>
         </div>
-        <p className="text-xs text-slate-400 mt-1">{reason.message}</p>
+        <p className="text-xs text-slate-300">{reason.message}</p>
       </div>
     </div>
   )
@@ -77,19 +85,36 @@ function Timeline({ events }: { events: AuditEvent[] }) {
     <div className="space-y-3 text-sm">
       {events.map((e) => (
         <div key={e.id} className="flex gap-3 items-start">
-          <div className="w-28 text-xs text-slate-500">{new Date(e.timestamp).toLocaleTimeString()}</div>
+          <div className="w-24 text-xs text-slate-500 flex items-center gap-1">
+            <span>{iconForType[e.type] || '🧩'}</span>
+            <span>{new Date(e.timestamp).toLocaleTimeString()}</span>
+          </div>
           <div className="flex-1">
             <div className="flex items-center gap-2">
               <Badge text={e.type} tone={e.type === 'EXECUTION' ? 'orange' : e.type === 'POLICY' ? 'purple' : 'slate'} />
+              {e.threat_type && <Badge text={e.threat_type} tone="red" />}
               <span className="text-xs text-slate-500">{e.intentId}</span>
             </div>
-            <pre className="text-xs text-slate-200 bg-slate-900/70 border border-slate-800 rounded p-2 mt-1 whitespace-pre-wrap break-all">
-              {JSON.stringify(e.payload, null, 2)}
-            </pre>
+            <p className="text-xs text-slate-300 mt-1">
+              {e.decision_reason || e.explanation || JSON.stringify(e.payload)}
+            </p>
           </div>
         </div>
       ))}
       {events.length === 0 && <p className="text-slate-500 text-sm">No audit events yet.</p>}
+    </div>
+  )
+}
+
+function ArchitectureView() {
+  return (
+    <div className="card">
+      <h3 className="font-semibold mb-2">Architecture View</h3>
+      <p className="text-xs text-slate-400 mb-2">Security boundary highlighted at Policy Enforcement Layer.</p>
+      <div className="text-sm leading-6">
+        User → LLM (FinanceAgent) → Intent → <span className="text-emerald-300 font-semibold">Policy Enforcement Layer</span> → Executor (Alpaca/Atomic) → Audit Log
+      </div>
+      <p className="text-xs text-amber-300 mt-2">Zero Trust: LLM output is untrusted until policy validation.</p>
     </div>
   )
 }
@@ -102,25 +127,29 @@ export default function App() {
   const [policy, setPolicy] = useState<PolicyConfig | null>(null)
   const [portfolio, setPortfolio] = useState<PortfolioSummary | null>(null)
   const [latestIntent, setLatestIntent] = useState<IntentRecord | null>(null)
+  const [security, setSecurity] = useState<SecurityStatus | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [lastPreset, setLastPreset] = useState<string | null>(null)
 
   // Polling hooks
   useEffect(() => {
     const poll = async () => {
       try {
-        const [tl, led, pol, port, latest] = await Promise.all([
+        const [tl, led, pol, port, latest, sec] = await Promise.all([
           fetchJSON<{ events: AuditEvent[] }>('/api/audit/timeline'),
           fetchJSON<LedgerSnapshot>('/api/ledger/status'),
           fetchJSON<PolicyConfig>('/api/policy/json'),
           fetchJSON<PortfolioSummary>('/api/portfolio'),
           fetchJSON<{ intent: IntentRecord | null }>('/api/intent/latest'),
+          fetchJSON<SecurityStatus>('/api/security/status'),
         ])
         setTimeline(tl.events || [])
         setLedger(led)
         setPolicy(pol)
         setPortfolio(port)
         setLatestIntent(latest.intent || null)
+        setSecurity(sec)
       } catch (e) {
         console.error(e)
       }
@@ -133,6 +162,7 @@ export default function App() {
   const runPreset = async (preset: string) => {
     setLoading(true)
     setError(null)
+    setLastPreset(preset)
     try {
       const res = await fetchJSON<ScenarioResult>('/api/simulate/scenario', {
         method: 'POST',
@@ -151,6 +181,7 @@ export default function App() {
     if (!scenarioText.trim()) return
     setLoading(true)
     setError(null)
+    setLastPreset(null)
     try {
       const res = await fetchJSON<ScenarioResult>('/api/simulate/scenario', {
         method: 'POST',
@@ -174,14 +205,17 @@ export default function App() {
     <div className="min-h-screen bg-slate-950 text-slate-50">
       <header className="px-6 py-4 border-b border-slate-800 flex justify-between items-center">
         <div>
-          <p className="text-xs text-slate-500">OpenClaw + ArmorClaw</p>
-          <h1 className="text-2xl font-semibold">Explainable Enforcement Dashboard</h1>
+          <p className="text-xs text-slate-500">Secure Autonomous AI System</p>
+          <h1 className="text-2xl font-semibold">OpenClaw + ArmorClaw – Security Dashboard</h1>
         </div>
-        <Badge text="Live" tone="green" />
+        <div className="flex items-center gap-2">
+          <Badge text="Zero Trust" tone="yellow" />
+          <Badge text="Live" tone="green" />
+        </div>
       </header>
 
-      <main className="p-6 grid gap-4 xl:grid-cols-3">
-        <section className="xl:col-span-2 space-y-4">
+      <main className="p-6 grid gap-4 2xl:grid-cols-3">
+        <section className="2xl:col-span-2 space-y-4">
           <div className="card space-y-3">
             <div className="flex justify-between items-center">
               <div>
@@ -190,6 +224,7 @@ export default function App() {
               </div>
               {result && <Badge text={result.evaluation.decision} tone={decisionTone} />}
             </div>
+            <p className="text-xs text-amber-300">LLM output is treated as untrusted input. All actions require policy validation.</p>
             <div className="flex gap-3">
               <input
                 value={scenarioText}
@@ -213,15 +248,22 @@ export default function App() {
                 </pre>
               </div>
               <div>
-                <p className="text-xs text-slate-500 mb-1">Evaluation Decision</p>
+                <p className="text-xs text-slate-500 mb-1">Decision</p>
                 {result ? (
                   <div className="space-y-2">
                     <Badge text={result.evaluation.decision} tone={decisionTone} />
                     <p className="text-sm text-slate-300">
                       {result.evaluation.decision === 'ALLOW'
-                        ? 'All guards satisfied'
+                        ? 'All security constraints satisfied'
                         : `Blocked by ${result.evaluation.failedPolicyId || 'policy'}`}
                     </p>
+                    {result.evaluation.security_tags.length > 0 && (
+                      <div className="flex gap-2 flex-wrap">
+                        {result.evaluation.security_tags.map((t) => (
+                          <Badge key={t} text={t} tone="red" />
+                        ))}
+                      </div>
+                    )}
                   </div>
                 ) : (
                   <p className="text-slate-500 text-sm">Run a scenario to see evaluation.</p>
@@ -234,8 +276,8 @@ export default function App() {
           <div className="grid md:grid-cols-2 gap-4">
             <div className="card">
               <div className="flex items-center justify-between mb-3">
-                <h3 className="font-semibold">Policy Evaluation (rule-by-rule)</h3>
-                <span className="text-xs text-slate-500">color-coded pass/fail</span>
+                <h3 className="font-semibold">Policy Enforcement Layer</h3>
+                <span className="text-xs text-slate-500">Security Constraints</span>
               </div>
               <div className="space-y-2">
                 {result?.evaluation.reasons.map((r) => (
@@ -292,21 +334,54 @@ export default function App() {
         <section className="space-y-4">
           <div className="card">
             <div className="flex items-center justify-between mb-3">
-              <h3 className="font-semibold">Scenario Simulator</h3>
-              <span className="text-xs text-slate-500">one-click demos</span>
+              <h3 className="font-semibold">Security Overview Panel</h3>
+              <Badge text="ENFORCED" tone="green" />
             </div>
-            <div className="grid grid-cols-2 gap-2">
+            {security ? (
+              <div className="space-y-2 text-sm">
+                <p className="text-xs text-slate-500">Security Status</p>
+                <div className="flex gap-3">
+                  <Badge text={`Allowed: ${security.total_allowed}`} tone="green" />
+                  <Badge text={`Blocked: ${security.total_blocked}`} tone="red" />
+                </div>
+                <p className="text-xs text-slate-500 mt-2">Threat categories</p>
+                <div className="space-y-1">
+                  {Object.entries(security.violations_by_type).map(([k, v]) => (
+                    <div key={k} className="flex justify-between text-xs">
+                      <span>{k}</span>
+                      <span className="text-amber-300">{v}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <p className="text-slate-500 text-sm">Loading…</p>
+            )}
+          </div>
+
+          <div className="card">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="font-semibold">Attack Simulation Panel</h3>
+              <span className="text-xs text-slate-500">Blocked by Policy / Allowed</span>
+            </div>
+            <div className="grid grid-cols-1 gap-2">
               {presets.map((p) => (
                 <button
                   key={p.key}
                   onClick={() => runPreset(p.key)}
-                  className="px-3 py-2 rounded bg-slate-900 border border-slate-800 hover:border-slate-600 text-sm text-left"
+                  className="px-3 py-2 rounded bg-slate-900 border border-slate-800 hover:border-slate-600 text-left"
                   disabled={loading}
                 >
                   <div className="flex items-center gap-2">
                     <Badge text={p.label} tone={p.tone as any} />
+                    <Badge text={`Expected: ${p.expect}`} tone={p.expect === 'ALLOW' ? 'green' : 'red'} />
                   </div>
-                  <p className="text-xs text-slate-400 mt-1">Simulated & logged</p>
+                  <p className="text-xs text-slate-400 mt-1">{p.desc}</p>
+                  {lastPreset === p.key && result && (
+                    <p className="text-xs mt-1 text-slate-200">
+                      Result: {result.evaluation.decision} ({result.evaluation.failedPolicyId || 'all constraints passed'})
+                    </p>
+                  )}
                 </button>
               ))}
             </div>
@@ -315,11 +390,11 @@ export default function App() {
           <div className="card">
             <div className="flex items-center justify-between mb-3">
               <h3 className="font-semibold">Policy Snapshot</h3>
-              <span className="text-xs text-slate-500">live from policy.yaml</span>
+              <span className="text-xs text-slate-500">Policy Enforcement Layer</span>
             </div>
             {policy ? (
               <div className="space-y-2 text-sm">
-                <p className="text-xs text-slate-500">Allowlists</p>
+                <p className="text-xs text-slate-500">Security Constraints</p>
                 <p>Tickers: {policy.limits.approved_symbols.join(', ')}</p>
                 <p>Actors: {policy.limits.allowed_actors.join(', ')}</p>
                 <p>Asset classes: {policy.limits.allowed_asset_classes.join(', ')}</p>
@@ -333,6 +408,18 @@ export default function App() {
               <p className="text-slate-500 text-sm">Loading policy…</p>
             )}
           </div>
+
+          <div className="card">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="font-semibold">Zero Trust Indicator</h3>
+              <span className="text-xs text-amber-300">Trust nothing, verify everything</span>
+            </div>
+            <p className="text-sm text-slate-200">
+              LLM output is treated as untrusted. Every action is validated by the Policy Enforcement Layer before execution. Violations are blocked and logged with threat tags.
+            </p>
+          </div>
+
+          <ArchitectureView />
 
           <div className="card">
             <div className="flex items-center justify-between mb-3">

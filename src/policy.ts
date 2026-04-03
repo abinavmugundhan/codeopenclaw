@@ -2,7 +2,7 @@ import fs from 'fs';
 import yaml from 'js-yaml';
 import path from 'path';
 import { randomUUID } from 'crypto';
-import { TradeIntent, PolicyEvaluation, PolicyConfig, PolicyReason } from './types';
+import { TradeIntent, PolicyEvaluation, PolicyConfig, PolicyReason, ThreatType, RuleSeverity } from './types';
 import { TradeLedger } from './ledger';
 
 type PolicyPredicate = (intent: TradeIntent) => boolean;
@@ -107,6 +107,38 @@ export class PolicyEngine {
     };
   }
 
+  private threatForRule(rule: string): ThreatType {
+    const map: Record<string, ThreatType> = {
+      per_order_limit: 'RISK_LIMIT',
+      daily_limit: 'RISK_LIMIT',
+      per_symbol_daily_limit: 'RISK_LIMIT',
+      market_hours: 'TIME_VIOLATION',
+      blackout_window: 'TIME_VIOLATION',
+      symbol_allowed: 'UNAUTHORIZED_ASSET',
+      asset_class_allowed: 'UNAUTHORIZED_ASSET',
+      actor_allowed: 'POLICY_BREACH',
+      delegation_limit: 'POLICY_BREACH',
+      action_allowed: 'POLICY_BREACH',
+    };
+    return map[rule] || 'POLICY_BREACH';
+  }
+
+  private severityForRule(rule: string): RuleSeverity {
+    const map: Record<string, RuleSeverity> = {
+      per_order_limit: 'HIGH',
+      daily_limit: 'HIGH',
+      per_symbol_daily_limit: 'MEDIUM',
+      market_hours: 'MEDIUM',
+      blackout_window: 'HIGH',
+      symbol_allowed: 'HIGH',
+      asset_class_allowed: 'HIGH',
+      actor_allowed: 'MEDIUM',
+      delegation_limit: 'MEDIUM',
+      action_allowed: 'MEDIUM',
+    };
+    return map[rule] || 'MEDIUM';
+  }
+
   private buildReason(policyId: string, effect: 'allow' | 'deny', passed: boolean, intent: TradeIntent): PolicyReason {
     const defaultMsg = passed ? 'Passed policy' : 'Failed policy';
     const messages: Record<string, string> = {
@@ -142,6 +174,8 @@ export class PolicyEngine {
       rule: policyId,
       result: passed ? 'PASS' : 'FAIL',
       message: messages[policyId] ?? defaultMsg,
+      severity: this.severityForRule(policyId),
+      threat_type: this.threatForRule(policyId),
       effect,
     };
   }
@@ -169,10 +203,14 @@ export class PolicyEngine {
 
     const allowed = !failedPolicyId;
     this.nowOverride = undefined;
+    const security_tags = reasons
+      .filter((r) => r.result === 'FAIL' && r.threat_type)
+      .map((r) => r.threat_type!) ?? [];
     return {
       id: randomUUID(),
       decision: allowed ? 'ALLOW' : 'DENY',
       reasons,
+      security_tags,
       failedPolicyId,
       allowed,
     };

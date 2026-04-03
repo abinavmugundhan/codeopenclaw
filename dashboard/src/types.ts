@@ -45,6 +45,8 @@ export type PolicyReason = {
   rule: string
   result: 'PASS' | 'FAIL'
   message: string
+  severity: 'LOW' | 'MEDIUM' | 'HIGH'
+  threat_type?: 'RISK_LIMIT' | 'TIME_VIOLATION' | 'UNAUTHORIZED_ASSET' | 'POLICY_BREACH'
   effect?: 'allow' | 'deny'
 }
 
@@ -52,6 +54,7 @@ export type PolicyEvaluation = {
   id: string
   decision: 'ALLOW' | 'DENY'
   reasons: PolicyReason[]
+  security_tags: string[]
   failedPolicyId?: string
   allowed: boolean
 }
@@ -75,6 +78,9 @@ export type AuditEvent = {
   type: 'INTENT' | 'POLICY' | 'EXECUTION'
   timestamp: string
   payload: any
+  threat_type?: string
+  decision_reason?: string
+  explanation?: string
 }
 
 export type ScenarioResult = {
@@ -83,4 +89,11 @@ export type ScenarioResult = {
   evaluation: PolicyEvaluation
   execution: ExecutionRecord | null
   preset?: string
+}
+
+export type SecurityStatus = {
+  total_allowed: number
+  total_blocked: number
+  violations_by_type: Record<string, number>
+  enforced: boolean
 }

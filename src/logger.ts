@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { randomUUID } from 'crypto';
-import { AuditEvent, ExecutionRecord, IntentRecord, PolicyEvaluation, TradeIntent } from './types';
+import { AuditEvent, ExecutionRecord, IntentRecord, PolicyEvaluation, TradeIntent, ThreatType } from './types';
 
 export class AuditLogger {
   private jsonLogFile: string;
@@ -48,22 +48,38 @@ export class AuditLogger {
   }
 
   public logPolicyDecision(intentId: string, evaluation: PolicyEvaluation) {
+    const failing = evaluation.reasons.find((r) => r.result === 'FAIL');
     this.append({
       id: evaluation.id || randomUUID(),
       intentId,
       type: 'POLICY',
       timestamp: new Date().toISOString(),
       payload: evaluation,
+      threat_type: failing?.threat_type,
+      decision_reason: failing?.message,
+      explanation: failing?.message,
     });
   }
 
   public logExecution(intentId: string, execution: ExecutionRecord) {
+    const threat: ThreatType | undefined =
+      execution.status === 'BLOCKED' && execution.details?.reasons
+        ? execution.details.reasons.find((r: any) => r.result === 'FAIL')?.threat_type
+        : undefined;
+    const decisionReason =
+      execution.status === 'BLOCKED' && execution.details?.reasons
+        ? execution.details.reasons.find((r: any) => r.result === 'FAIL')?.message
+        : undefined;
+
     this.append({
       id: randomUUID(),
       intentId,
       type: 'EXECUTION',
       timestamp: new Date().toISOString(),
       payload: execution,
+      threat_type: threat,
+      decision_reason: decisionReason,
+      explanation: decisionReason,
     });
   }
 
