@@ -1,20 +1,76 @@
+limits:
+  approved_symbols:
+    - AAPL
+    - MSFT
+    - TSLA
+    - NVDA
+  allowed_asset_classes:
+    - equity
+  allowed_actions:
+    - buy
+    - sell
+    - analyze
+    - status
+  allowed_actors:
+    - analyst
+    - trader
+    - risk
+    - system
+  per_order_max_qty: 5
+  per_symbol_daily_max_qty: 10
+  daily_max_qty: 20
+  market_hours_only: true
+  blackout:
+    start: null
+    end: null
+
 policies:
-  - id: allowed_asset_classes
-    condition: "intent.asset_class == 'equity'"
+  - id: asset_class_allowed
+    condition: asset_class_allowed
     effect: allow
+    description: Only permit configured asset classes.
 
-  - id: allowed_symbols
-    condition: "['AAPL', 'MSFT', 'TSLA'].includes(intent.symbol)"
+  - id: action_allowed
+    condition: action_allowed
     effect: allow
+    description: Only permit approved actions.
 
-  - id: max_quantity
-    condition: "intent.quantity <= 5"
+  - id: symbol_allowed
+    condition: symbol_allowed
     effect: allow
+    description: Only allow listed tickers.
 
-  - id: block_oversize_trade
-    condition: "intent.quantity > 5"
+  - id: per_order_limit
+    condition: per_order_limit
+    effect: allow
+    description: Enforce max quantity per order.
+
+  - id: per_symbol_daily_limit
+    condition: per_symbol_daily_limit
+    effect: allow
+    description: Cap daily quantity per symbol.
+
+  - id: daily_limit
+    condition: daily_limit
+    effect: allow
+    description: Cap total daily quantity across symbols.
+
+  - id: market_hours
+    condition: market_hours
+    effect: allow
+    description: Only trade during market hours.
+
+  - id: blackout_window
+    condition: blackout_window
     effect: deny
+    description: Deny trades during blackout windows.
 
-  - id: block_unknown_symbol
-    condition: "!['AAPL', 'MSFT', 'TSLA'].includes(intent.symbol)"
-    effect: deny
+  - id: actor_allowed
+    condition: actor_allowed
+    effect: allow
+    description: Only approved actors may submit trades.
+
+  - id: delegation_limit
+    condition: delegation_limit
+    effect: allow
+    description: Delegated trades must not exceed granted limit.
